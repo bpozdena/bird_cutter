@@ -1,14 +1,15 @@
 import cv2
-import numpy as np
 import subprocess
 import os
 import argparse
+import datetime
+import time
+import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from tqdm import tqdm
-import datetime
-import time
 from collections import deque
+from datetime import timedelta
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Process video for bird activity.')
@@ -67,6 +68,9 @@ def smooth_diffs(diff_sums, window_size):
         smoothed_diffs.append(np.mean(window))
     return smoothed_diffs
 
+def format_time(seconds):
+    return str(timedelta(seconds=seconds))
+
 def create_plot(log_file_path, output_dir, motion_threshold, filtered_segments, fps):
     try:
         frame_numbers = []
@@ -82,6 +86,9 @@ def create_plot(log_file_path, output_dir, motion_threshold, filtered_segments, 
                 except ValueError:
                     print(f"Skipping invalid line: {line.strip()}")
 
+        # Create a list of times corresponding to frame numbers
+        times = [frame_number / fps for frame_number in frame_numbers]
+
         plt.figure(figsize=(12, 6))
         plt.plot(frame_numbers, diff_sums, label='Difference Sum', color='blue')
 
@@ -90,7 +97,13 @@ def create_plot(log_file_path, output_dir, motion_threshold, filtered_segments, 
             plt.axvline(x=end_time * fps, color='red', linestyle='--', label='Segment End' if plt.gca().get_legend_handles_labels()[1].count('Segment End') == 0 else "")
 
         plt.axhline(y=motion_threshold, color='gray', linestyle='solid', label='Motion Threshold')
-        plt.xlabel('Frame Number')
+        
+        # Set x-axis ticks to show both frame numbers and times
+        xticks = plt.xticks()[0]
+        xlabels = [f"{int(tick)}\n({format_time(tick / fps)})" for tick in xticks]
+        plt.xticks(ticks=xticks, labels=xlabels)
+        
+        plt.xlabel('Frame Number (Time in hh:mm:ss)')
         plt.ylabel('Difference Sum')
         plt.title('Motion Detection')
         plt.legend()
@@ -104,8 +117,12 @@ def create_plot(log_file_path, output_dir, motion_threshold, filtered_segments, 
         print(f"Plot saved as {plot_file_path}")
 
         # Plotly interactive plot
+        times_formatted = [format_time(time) for time in times]
+        
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=frame_numbers, y=diff_sums, mode='lines', name='Difference Sum'))
+        fig.add_trace(go.Scatter(x=frame_numbers, y=diff_sums, mode='lines', name='Difference Sum',
+                                 hovertemplate='<br><b>Frame:</b> %{x}<br><b>Time:</b> %{text}<br><b>Diff Sum:</b> %{y}',
+                                 text=times_formatted))
         fig.add_trace(go.Scatter(x=[0, max(frame_numbers)], y=[motion_threshold, motion_threshold], mode='lines', name='Motion Threshold', line=dict(color='gray', dash='solid')))
 
         segment_number = 0
@@ -117,11 +134,16 @@ def create_plot(log_file_path, output_dir, motion_threshold, filtered_segments, 
 
         fig.update_layout(
             title='Frame Difference Sum Over Time',
-            xaxis_title='Frame Number',
+            xaxis_title='Frame Number (Time in hh:mm:ss)',
             yaxis_title='Difference Sum',
             legend_title='Legend',
             autosize=True,
-            hovermode='x'
+            hovermode='x unified',
+            xaxis=dict(
+                tickmode='array',
+                tickvals=frame_numbers[::len(frame_numbers)//10],
+                ticktext=[f"{int(f)} ({format_time(f / fps)})" for f in frame_numbers[::len(frame_numbers)//10]]
+            )
         )
 
         interactive_plot_file_path = os.path.join(output_dir, 'motion_detection_plot_interactive.html')
