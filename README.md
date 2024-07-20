@@ -8,7 +8,7 @@ This is a simple tool which processes long video footage taken and extracts only
  1) - `pip install -r requirements.txt`
     <br>or
     - `pip install plotly numpy opencv-python tqdm`
- 1) Run the script `python boris1.py video.mp4`
+ 1) Run the script `python bird_cutter.py video.mp4`
 
 # Usage
 1) Activate the Python virtual environment with `source venv/bin/activate`. 
