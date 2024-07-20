@@ -14,16 +14,18 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Process video for bird activity.')
     parser.add_argument('video_path', type=str, help='Path to the input video file')
     parser.add_argument('--output_dir', type=str, help='Directory to save output files')
-    parser.add_argument('--sensitivity', type=float, default=0.5, help='Sensitivity for motion detection in percentage (0-100) Examples: 1080p = 0.2, 4k = 0.5)')
+    parser.add_argument('--sensitivity', type=float, default=0.5, help='Sensitivity for motion detection in percentage (0-100) to calculate motion threshold. Examples: 1080p = 0.2, 4k = 0.5)')
     parser.add_argument('--buffer_before', type=int, default=3, help='Seconds before motion event')
     parser.add_argument('--buffer_after', type=int, default=3, help='Seconds after motion event')
     parser.add_argument('--min_interval', type=int, default=5, help='Minimum seconds between segments to keep them separate')
-    parser.add_argument('--min_avg_diff_sum', type=int, default=50000, help='Minimum average difference sum to keep a segment')
+    parser.add_argument('--min_avg_diff_sum', type=int, default=500, help='Minimum average difference sum to keep a segment')
     parser.add_argument('--example', action='store_true', help='Show an example of the CLI syntax and exit')
     parser.add_argument('--check_frame', type=int, help='Specify the nth frame to check for differences')
     parser.add_argument('--start_time', type=float, default=0.0, help='Specify the starting time in seconds for processing')
     parser.add_argument('--end_time', type=float, help='Specify the ending time in seconds for processing')
     parser.add_argument('--smoothing', type=int, default=0, help='Enable smoothing with a window size in frames (0 to disable, 30 to average over 30 frames, etc.)')
+    parser.add_argument('--resize_factor', type=float, default=0.1, help='Resize factor for processing. Example: 0.5 for 50% of original resolution')
+    parser.add_argument('--motion_threshold', type=int, help='Threshold for motion detection in pixel value sum. Examples: 1080p = 50000, 4k = 500000')
 
     args = parser.parse_args()
 
@@ -35,13 +37,27 @@ def parse_arguments():
     return args
 
 
-def detect_motion(frame1, frame2, motion_threshold):
+def detect_motion(frame1, frame2, motion_threshold, resize_factor):
+    if resize_factor != 1:
+        frame1 = cv2.resize(frame1, (0, 0), fx=resize_factor, fy=resize_factor)
+        frame2 = cv2.resize(frame2, (0, 0), fx=resize_factor, fy=resize_factor)
+    
+    # Convert both frames to grayscale in one step
     gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    
+    # Compute the absolute difference between the two grayscale images
     diff = cv2.absdiff(gray1, gray2)
+    
+    # Apply thresholding to the difference image
     _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    
+    # Sum the thresholded image and compare against the motion threshold
     diff_sum = np.sum(thresh)
+    
+    # Return the sum and the boolean indicating if motion threshold is exceeded
     return diff_sum, diff_sum > motion_threshold
+
 
 def smooth_diffs(diff_sums, window_size):
     smoothed_diffs = []
@@ -60,7 +76,7 @@ def create_plot(log_file_path, output_dir, motion_threshold, filtered_segments, 
             next(file)  # Skip the header line
             for line in file:
                 try:
-                    frame_number, diff_sum = map(float, line.strip().split(','))
+                    frame_number, diff_sum = map(float, line.strip().split(',')[:2])
                     frame_numbers.append(frame_number)
                     diff_sums.append(diff_sum)
                 except ValueError:
@@ -119,7 +135,7 @@ def create_unique_output_dir(base_dir):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     new_dir = f"{base_dir}_{timestamp}"
     os.makedirs(new_dir, exist_ok=True)
-    print(f"Output directory created: {new_dir}")  # Debug statement
+    print(f"Output directory created: {new_dir}")  
     return new_dir
 
 def main():
@@ -137,11 +153,13 @@ def main():
     start_time = args.start_time
     end_time = args.end_time
     smoothing_window = args.smoothing
+    resize_factor = args.resize_factor
+    motion_threshold = args.motion_threshold
 
     output_dir = create_unique_output_dir(output_dir)
 
     log_file_path = os.path.join(output_dir, 'motion_log.csv')
-    print(f"Log file path: {log_file_path}")  # Debug statement
+    print(f"Log file path: {log_file_path}")  
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -153,8 +171,8 @@ def main():
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_pixels = width * height
-    motion_threshold = int(sensitivity * total_pixels)
-    print(f"Total frames: {total_frames}, Frame size: {width}x{height}, Motion threshold: {motion_threshold}, FPS: {fps}")  # Debug statement
+    motion_threshold = motion_threshold or int(sensitivity * total_pixels)
+    print(f"Total frames: {total_frames}, Frame size: {width}x{height}, FPS: {fps}, Motion threshold: {motion_threshold}")  
 
     if end_time is not None and end_time * fps > total_frames:
         print(f"Error: --end_time must be less than or equal to {total_frames / fps:.2f} seconds.")
@@ -209,7 +227,7 @@ def main():
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         log_file = open(log_file_path, 'w')
-        log_file.write('frame_number,difference_sum\n')
+        log_file.write('frame_number,difference_sum,motion_detected\n')
 
         with tqdm(total=end_frame - start_frame, desc="Processing Frames") as pbar:
             for frame_number in range(start_frame, end_frame):
@@ -219,7 +237,7 @@ def main():
                     break
 
                 if prev_frame is not None:
-                    diff_sum, motion_detected = detect_motion(prev_frame, frame, motion_threshold)
+                    diff_sum, motion_detected = detect_motion(prev_frame, frame, motion_threshold, resize_factor)
 
                     # Handle smoothing
                     if smoothing_window > 0:
@@ -230,7 +248,7 @@ def main():
                     else:
                         smoothed_diff_sum = diff_sum
 
-                    log_file.write(f"{frame_number},{smoothed_diff_sum}\n")
+                    log_file.write(f"{frame_number},{smoothed_diff_sum},{motion_detected}\n")
 
                     if motion_detected:
                         start_time = max(0, (frame_number - buffer_before_seconds * fps) / fps)
@@ -256,6 +274,8 @@ def main():
             merged_segments[-1] = (merged_segments[-1][0], max(last_end_time, end_time))
         last_end_time = merged_segments[-1][1]
 
+    print(f"Merged {len(merged_segments)} segments: {merged_segments}")
+
     filtered_segments = []
     try:
         with open(log_file_path, 'r') as log_file:
@@ -266,9 +286,9 @@ def main():
             end_frame = int(end_time * fps)
             diff_sums_segment = []
             for line in lines:
-                if line.strip() == 'frame_number,difference_sum':
+                if line.strip() == 'frame_number,difference_sum,motion_detected':
                     continue
-                frame_num, diff_sum = map(int, line.strip().split(','))
+                frame_num, diff_sum = map(int, line.strip().split(',')[:2])
                 if start_frame <= frame_num <= end_frame:
                     diff_sums_segment.append(diff_sum)
 
@@ -276,6 +296,9 @@ def main():
                 avg_diff_sum = np.mean(diff_sums_segment)
                 if avg_diff_sum >= min_avg_diff_sum:
                     filtered_segments.append((start_time, end_time))
+
+        # print(f"Diff sums {len(diff_sums_segment)} segments: {diff_sums_segment}")
+        print(f"Filtered {len(filtered_segments)} segments: {filtered_segments}")
     except Exception as e:
         print(f"Error reading log file: {e}")
 
@@ -296,9 +319,9 @@ def main():
 
             diff_sums_segment = []
             for line in lines:
-                if line.strip() == 'frame_number,difference_sum':
+                if line.strip() == 'frame_number,difference_sum,motion_detected':
                     continue
-                frame_num, diff_sum = map(int, line.strip().split(','))
+                frame_num, diff_sum = map(int, line.strip().split(',')[:2])
                 if start_frame <= frame_num <= end_frame:
                     diff_sums_segment.append(diff_sum)
 
@@ -316,7 +339,7 @@ def main():
         print(f"Error processing log file: {e}")
 
     details_file_path = os.path.join(output_dir, 'segment_details.txt')
-    print(f"Details file path: {details_file_path}")  # Debug statement
+    print(f"Details file path: {details_file_path}")  
 
     try:
         with open(details_file_path, 'w') as details_file:
