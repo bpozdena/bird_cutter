@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# Unignore specific files and directories
+!.gitignore
+!README.md
+!bird_cutter.py
+!requirements.txt
